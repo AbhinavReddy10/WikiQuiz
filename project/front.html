@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WikiQuiz Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body { font-family: "Inter", sans-serif; }
+    .loader { border-top-color: #3498db; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <div class="container mx-auto max-w-4xl p-4 py-8 md:py-12">
+    <header class="mb-8">
+      <h1 class="text-4xl font-bold text-gray-800 text-center">WikiQuiz Generator</h1>
+      <p class="text-lg text-gray-600 text-center mt-2">Turn any Wikipedia article into a quiz.</p>
+    </header>
+
+    <!-- Tabs -->
+    <div class="mb-6">
+      <div class="flex border-b border-gray-300">
+        <button id="tab-generate" class="tab-btn -mb-px border-b-2 border-blue-500 text-blue-600 py-3 px-6 font-semibold" data-tab="generate">Generate Quiz</button>
+        <button id="tab-history" class="tab-btn border-b-2 border-transparent text-gray-500 hover:text-gray-700 py-3 px-6 font-semibold" data-tab="history">Past Quizzes</button>
+      </div>
+    </div>
+
+    <!-- TAB 1 -->
+    <div id="content-generate" class="tab-content">
+      <div class="bg-white p-6 md:p-8 rounded-xl shadow-sm">
+        <div class="flex flex-col md:flex-row gap-4">
+          <input type="url" id="wiki-url" class="flex-grow p-4 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Paste a Wikipedia article URL..." />
+          <button id="generate-btn" class="bg-blue-600 text-white font-semibold py-4 px-8 rounded-lg shadow-md hover:bg-blue-700 transition duration-200">Generate Quiz</button>
+        </div>
+      </div>
+
+      <div id="loader" class="text-center py-12 hidden">
+        <div class="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-24 w-24 mx-auto"></div>
+        <p class="mt-4 text-gray-600 font-medium">Generating your quiz...</p>
+      </div>
+
+      <div id="error-box" class="bg-red-100 border border-red-400 text-red-700 px-6 py-4 rounded-lg mt-6 hidden">
+        <strong>Error:</strong> <span id="error-message"></span>
+      </div>
+
+      <div id="quiz-results" class="mt-8 hidden"></div>
+    </div>
+
+    <!-- TAB 2 -->
+    <div id="content-history" class="tab-content bg-white p-6 md:p-8 rounded-xl shadow-sm hidden">
+      <h2 class="text-2xl font-semibold text-gray-800 mb-4">Quiz History</h2>
+      <div class="overflow-x-auto">
+        <table id="history-table" class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">URL</th>
+              <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body" class="bg-white divide-y divide-gray-200">
+            <tr><td colspan="3" id="history-placeholder" class="px-6 py-12 text-center text-gray-500">No history yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal-backdrop" class="fixed inset-0 bg-black bg-opacity-60 z-40 hidden"></div>
+  <div id="modal" class="fixed inset-0 flex items-center justify-center z-50 p-4 hidden">
+    <div class="bg-white w-full max-w-3xl max-h-[90vh] rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div class="flex justify-between items-center p-5 border-b">
+        <h3 class="text-2xl font-semibold text-gray-800">Quiz Details</h3>
+        <button id="modal-close-btn" class="text-gray-400 hover:text-gray-600">&times;</button>
+      </div>
+      <div id="modal-content" class="p-6 md:p-8 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const API_BASE_URL = "http://127.0.0.1:8000";
+      const tabs = document.querySelectorAll(".tab-btn");
+      const tabContents = document.querySelectorAll(".tab-content");
+      const loader = document.getElementById("loader");
+      const quizResults = document.getElementById("quiz-results");
+      const errorBox = document.getElementById("error-box");
+      const errorMessage = document.getElementById("error-message");
+      const urlInput = document.getElementById("wiki-url");
+      const generateBtn = document.getElementById("generate-btn");
+      const historyTableBody = document.getElementById("history-table-body");
+      const modal = document.getElementById("modal");
+      const modalBackdrop = document.getElementById("modal-backdrop");
+      const modalContent = document.getElementById("modal-content");
+      const modalCloseBtn = document.getElementById("modal-close-btn");
+
+      // Tab switching
+      tabs.forEach(tab => tab.addEventListener("click", () => {
+        const name = tab.dataset.tab;
+        tabs.forEach(t => t.classList.toggle("border-blue-500", t.dataset.tab === name));
+        tabContents.forEach(c => c.classList.toggle("hidden", !c.id.includes(name)));
+        if (name === "history") loadHistory();
+      }));
+
+      // Generate quiz
+      generateBtn.addEventListener("click", async () => {
+        const url = urlInput.value.trim();
+        if (!url.startsWith("http")) return showError("Enter a valid Wikipedia URL.");
+        toggleLoader(true);
+        quizResults.innerHTML = ""; quizResults.classList.add("hidden");
+        try {
+          const res = await fetch(`${API_BASE_URL}/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to generate quiz.");
+          showQuiz(data, quizResults);
+          quizResults.classList.remove("hidden");
+        } catch (e) {
+          showError(e.message);
+        } finally {
+          toggleLoader(false);
+        }
+      });
+
+      // Load quiz history
+      async function loadHistory() {
+        historyTableBody.innerHTML = "";
+        const res = await fetch(`${API_BASE_URL}/quizzes`);
+        const data = await res.json();
+        if (!data.length) {
+          historyTableBody.innerHTML = "<tr><td colspan='3' class='text-center py-6 text-gray-500'>No quizzes found.</td></tr>";
+          return;
+        }
+        data.forEach(q => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="px-6 py-4">${q.title}</td>
+            <td class="px-6 py-4 truncate max-w-xs"><a href="${q.url}" target="_blank" class="text-blue-600">${q.url}</a></td>
+            <td class="px-6 py-4 text-right"><button class="details-btn text-blue-600" data-id="${q.id}">Details</button></td>
+          `;
+          historyTableBody.appendChild(tr);
+        });
+      }
+
+      // Show quiz details
+      historyTableBody.addEventListener("click", async e => {
+        if (e.target.classList.contains("details-btn")) {
+          const id = e.target.dataset.id;
+          modalContent.innerHTML = "<p class='p-6 text-center'>Loading...</p>";
+          toggleModal(true);
+          const res = await fetch(`${API_BASE_URL}/quizzes/${id}`);
+          const data = await res.json();
+          showQuiz(data, modalContent);
+        }
+      });
+
+      modalCloseBtn.addEventListener("click", () => toggleModal(false));
+      modalBackdrop.addEventListener("click", () => toggleModal(false));
+
+      // Helpers
+      function toggleLoader(show) {
+        loader.classList.toggle("hidden", !show);
+        generateBtn.disabled = show;
+      }
+      function showError(msg) {
+        if (!msg) return errorBox.classList.add("hidden");
+        errorMessage.textContent = msg;
+        errorBox.classList.remove("hidden");
+      }
+      function toggleModal(show) {
+        modal.classList.toggle("hidden", !show);
+        modalBackdrop.classList.toggle("hidden", !show);
+      }
+      function showQuiz(data, container) {
+        container.innerHTML = `
+          <h2 class="text-2xl font-bold mb-4">${data.title}</h2>
+          <div class="space-y-6">
+            ${data.quiz_data.map((q, i) => `
+              <div class="p-6 bg-white rounded-lg shadow border border-gray-200">
+                <div class="flex justify-between items-center mb-3">
+                  <p class="font-semibold">${i + 1}. ${q.question}</p>
+                  <span class="text-xs px-2 py-1 rounded bg-gray-100">${q.difficulty}</span>
+                </div>
+                <ul class="mb-3">
+                  ${Object.entries(q.options).map(([k, v]) => `<li>${k}. ${v}</li>`).join("")}
+                </ul>
+                <button class="show-answer-btn text-blue-600">Show Answer</button>
+                <div class="answer hidden mt-2 p-2 bg-blue-50 rounded">
+                  <b>Answer:</b> ${q.correct_answer}<br/><i>${q.explanation}</i>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+          <div class="mt-6">
+            <h3 class="font-semibold mb-2">Related Topics:</h3>
+            <div class="flex flex-wrap gap-2">
+              ${data.related_topics.map(t => `<span class="bg-gray-100 px-3 py-1 rounded">${t}</span>`).join("")}
+            </div>
+          </div>
+        `;
+        container.querySelectorAll(".show-answer-btn").forEach(btn => btn.addEventListener("click", () => btn.nextElementSibling.classList.toggle("hidden")));
+      }
+    });
+  </script>
+</body>
+</html>
+
